@@ -76,43 +76,62 @@ int EpollClient::connToServ(int userId,const char* serverip,unsigned short servp
 
 int EpollClient::sendDataToServ(int userId){
     int sendsize=-1;
-    if(m_allUserStates[userId].states==CONNECT_OK||m_allUserStates[userId].states==RECV_OK){
+    if(m_allUserStates[userId].states==CONNECT_OK){
         //初始化报文头
         struct tcpHeader tcphd;
         tcphd.total_len=TCPLEN;
-        tcphd.des_sockfd=m_allUserStates[userId].sockfd;//接收方sockfd
-        if((tcphd.des_sockfd+1)%2==0){//奇数
-            tcphd.sourse_sockfd=tcphd.des_sockfd-1;
-        }else{
-            tcphd.sourse_sockfd=tcphd.des_sockfd+1;
+        tcphd.sourse_sockfd=m_allUserStates[userId].sockfd;//发送方sockfd
+        if((tcphd.sourse_sockfd+1)%2==0){//奇数
+            tcphd.des_sockfd=tcphd.sourse_sockfd-1;
+        }else{//偶数
+            tcphd.des_sockfd=tcphd.sourse_sockfd+1;
         }
         struct tcpMsg tcpmsg;
         tcpmsg.tcp_hd=&tcphd;
-        for(int i=0;i<1011;i++){
+        for(int i=0;i<10;i++){
             tcpmsg.msg[i]='a';
         }
-        tcpmsg.msg[1012]='\n';
+        // tcpmsg.msg[1011]='\n';
         
-        int resverse_len=TCPLEN;//报文需要发送长度
+        // int resverse_len=TCPLEN;//报文需要发送长度
 
-        int buff_reverse_size=0;//socketbuf中剩余数据
-        while(resverse_len>0){//数据包未发完
-            int len=0;
-            memset(m_allUserStates[userId].buf,0,1024);//缓冲空间初始化为0
-            memcpy(m_allUserStates[userId].buf,&tcphd,sizeof(tcphd));//拷贝报文头
-            len+=sizeof(tcphd);
-            memcpy(m_allUserStates[userId].buf+len,&tcpmsg.msg,sizeof(tcpmsg.msg));//数据拷贝到用户缓冲
-            buff_reverse_size=1012;//缓冲区剩余长度
-            resverse_len-=1012;
-            while(buff_reverse_size>0){//socket缓冲区中数据未发完
-                sendsize=send(m_allUserStates[userId].sockfd,m_allUserStates[userId].buf,m_allUserStates[userId].buflen,0);
-                 if(sendsize<0){
-                    printf("send error %s\n",strerror(errno));
-                }else{
-                    buff_reverse_size-=sendsize;
-                    printf("connfd %d send msg to connfd %d content:%s\n",tcphd.sourse_sockfd,tcphd.des_sockfd,m_allUserStates[userId].buf);
-                }
+        // int buff_reverse_size=0;//用户buf中剩余数据
+        // while(resverse_len>0){//数据包未发完
+        //     int len=0;
+        //     memset(m_allUserStates[userId].buf,0,1024);//缓冲空间初始化为0
+            
+        //     memcpy(m_allUserStates[userId].buf,&tcphd,sizeof(tcphd));//拷贝报文头
+        //     len+=sizeof(tcphd);
+        //     memcpy(m_allUserStates[userId].buf+len,&tcpmsg.msg,sizeof(tcpmsg.msg));//数据拷贝到用户缓冲
+        //     buff_reverse_size=0;//缓冲区剩余长度
+        //     resverse_len-=1012;
+        //     while(buff_reverse_size>0){//socket缓冲区中数据未发完
+        //         sendsize=send(m_allUserStates[userId].sockfd,m_allUserStates[userId].buf,m_allUserStates[userId].buflen,0);
+        //          if(sendsize<0){
+        //             printf("send error %s\n",strerror(errno));
+        //         }else{
+        //             buff_reverse_size-=sendsize;
+        //             printf("connfd %d send msg to connfd %d content:%s\n",tcphd.sourse_sockfd,tcphd.des_sockfd,m_allUserStates[userId].buf);
+        //         }
+        //     }
+        // }
+        memset(m_allUserStates[userId].buf,0,1024);//缓冲空间初始化为0
+        memcpy(m_allUserStates[userId].buf,&tcphd,sizeof(tcphd));//拷贝报文头
+        int len=0;
+        len+=sizeof(tcphd);
+
+        memcpy(m_allUserStates[userId].buf+len,&tcpmsg.msg,sizeof(tcpmsg.msg));//数据拷贝到用户缓冲
+        sendsize=send(m_allUserStates[userId].sockfd,m_allUserStates[userId].buf,sizeof(m_allUserStates[userId].buf),0);
+        if(sendsize<0){
+            if(errno!=EWOULDBLOCK){
+                printf("read error:%s\n",strerror(errno));
             }
+        }
+        else if (sendsize==0)
+        {
+            printf("send all data\n");
+        }else{
+            printf("connfd %d send msg to connfd %d content:%s\n",tcphd.sourse_sockfd,tcphd.des_sockfd,m_allUserStates[userId].buf+sizeof(tcphd));
         }
         m_allUserStates[userId].states=SNED_OK;
     }
@@ -121,6 +140,7 @@ int EpollClient::sendDataToServ(int userId){
 
 int EpollClient::recvDataFromServ(int userId,char *recvbuf,int buflen){
     int recvsize=-1;
+    int totalsize=0;
     if(m_allUserStates[userId].states==SNED_OK){
         recvsize=recv(m_allUserStates[userId].sockfd,recvbuf,buflen,0);
         if(recvsize<0){
@@ -128,13 +148,14 @@ int EpollClient::recvDataFromServ(int userId,char *recvbuf,int buflen){
         }else if(recvsize==0){
             printf("Client %d :connection closed by Server ,Sockfd:%d\n",userId,m_allUserStates[userId].sockfd);
         }else{
-            if(recvsize>12){//接受到真正数据
+            totalsize+=recvsize;
+            if(totalsize>12){//接受到真正数据
                 tcpMsg tmpmsg;
                 tcpHeader tmpheader;
                 tmpmsg.tcp_hd=&tmpheader;
-                memcpy(recvbuf,&tmpheader,sizeof(tcpHeader));
-                memcpy(recvbuf+sizeof(tcpHeader),tmpmsg.msg,sizeof(recvbuf)-sizeof(tcpHeader));//读出剩余数据
-                printf("connfd %d recive from connfd %d ,msg :%s\n",tmpmsg.tcp_hd->des_sockfd,tmpmsg.tcp_hd->sourse_sockfd,recvbuf);
+                memcpy(&tmpheader,recvbuf,sizeof(tcpHeader));
+                // memcpy(tmpmsg.msg,recvbuf+sizeof(tcpHeader),1024-len);//读出剩余数据
+                printf("connfd %d recive from connfd %d ,msg :%s\n",tmpmsg.tcp_hd->des_sockfd,tmpmsg.tcp_hd->sourse_sockfd,recvbuf+sizeof(tcpHeader));
                 m_allUserStates[userId].states=RECV_OK;
             }
         }
@@ -183,10 +204,8 @@ int EpollClient::runFunc(){
     }
     while(1){
         struct epoll_event events[MAXSOCKFDCOUNT];
-        char buf[1024];
-        bzero(buf,sizeof(buf));
-
-        int nready=epoll_wait(m_epollfd,events,MAXSOCKFDCOUNT,1000);//触发事件的fd个数
+        
+        int nready=epoll_wait(m_epollfd,events,MAXSOCKFDCOUNT,0);//触发事件的fd个数
         for(int i=0;i<nready;i++){//处理所发生事件
             struct epoll_event tmpevent;
             int clientsockfd=events[i].data.fd;//触发事件的sockfd
@@ -199,6 +218,11 @@ int EpollClient::runFunc(){
                     tmpevent.events=EPOLLIN|EPOLLET|EPOLLERR;
                     epoll_ctl(m_epollfd,EPOLL_CTL_MOD,tmpevent.data.fd,&tmpevent);//写完成，切换读
                 }
+                else if(nres==0){
+                    printf("connect close by peer client\n");
+                    delEpoll(clientsockfd);
+                    closeUser(userid);
+                }
                 else{
                     printf("%s fail,send %d,userid:%d,fd:%d\n",__func__,nres,userid,clientsockfd);
                     delEpoll(clientsockfd);
@@ -206,6 +230,9 @@ int EpollClient::runFunc(){
                 }
             }
             else if(events[i].events&EPOLLIN){//读事件，接受数据
+                char buf[1024];
+                bzero(buf,sizeof(buf));
+
                 int nlen=recvDataFromServ(userid,buf,1024);
                 if(nlen<0){//接受数据错误
                     printf("%s fail,error %s \n",__func__,strerror(errno));
@@ -215,7 +242,7 @@ int EpollClient::runFunc(){
                     printf("server disconnect ,userid:%d,sockfd:%d\n",userid,clientsockfd);
                     delEpoll(clientsockfd);
                     closeUser(userid);
-                }else{//正常接收数据完成
+                }else{//正常接收
                     m_sockfd_userid[clientsockfd]=userid;
                     tmpevent.data.fd=clientsockfd;
                     tmpevent.events=EPOLLOUT|EPOLLET;
@@ -232,7 +259,7 @@ int EpollClient::runFunc(){
 }
 
 int main(int argc,char **argv){
-    EpollClient *epollcli=new EpollClient(100,"127.0.0.1",8000);
+    EpollClient *epollcli=new EpollClient(CLIENT_NUM,"127.0.0.1",8000);
     if(epollcli==NULL){
         printf("create epoll Client fail\n");
     }
